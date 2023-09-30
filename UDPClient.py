@@ -1,6 +1,5 @@
 #UDP-Client python file
 import socket
-import rdt
 from PIL import Image
 
 
@@ -16,12 +15,31 @@ serverPort = 12500  # identify the server port within the client, but have the c
 clientSocket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
 # import image using relative directory of image file path
-img = Image.open("bitmap-img.bmp")
+# "bitmap-img.bmp" <- file name
+img = open("bitmap-img.bmp", "rb")
 # img.show() test to verify that the image is properly found and imported into pycharm, is working.
 
-rdt.rdt_send(img)
+# simulate conversion of the file into packets to send over to the server.
 
-packet = rdt.make_pkt(img)
+# to do so, break up the file into bytes, and send each byte to the server
 
-rdt.udt_send(packet)
+byte = img.read(1024)
+
+print("Sending bytes to Server...")
+while byte:
+    # send the outstanding byte
+    # once sent, get a new byte, of size 1024, from the image,
+    # repeat loop until there are no bytes left within the image.
+
+    # we must send by one byte at a time.
+    clientSocket.sendto(byte, (serverName, serverPort))
+    byte = img.read(1024)
+
+
+# await reply
+print("No more bytes left to send")
+# read reply characters from previously created socket into string, print string
+modifiedMessage, serverAddress = clientSocket.recvfrom(2048)
+print("From server: ", modifiedMessage.decode())
+clientSocket.close()
 
