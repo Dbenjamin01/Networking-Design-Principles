@@ -1,5 +1,7 @@
 #UDP-Client python file
 import socket
+import os
+import time
 from PIL import Image
 
 
@@ -16,7 +18,13 @@ clientSocket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
 # import image using relative directory of image file path
 # "bitmap-img.bmp" <- file name
+imgname = "bitmap-img.bmp" # ref: https://www.digitalocean.com/community/tutorials/how-to-get-file-size-in-python
 img = open("bitmap-img.bmp", "rb")
+file_statistics = os.stat(imgname)
+numbPackets = int((file_statistics.st_size / 1024 + 1))
+
+clientSocket.sendto((str(numbPackets).encode()), (serverName, serverPort))# send file size to server to prepare for loop for receiving data.
+time.sleep(3)
 # img.show() test to verify that the image is properly found and imported into pycharm, is working.
 
 # simulate conversion of the file into packets to send over to the server.
@@ -38,8 +46,10 @@ while byte:
 
 # await reply
 print("No more bytes left to send")
-# read reply characters from previously created socket into string, print string
-modifiedMessage, serverAddress = clientSocket.recvfrom(2048)
-print("From server: ", modifiedMessage.decode())
+img.close()
 clientSocket.close()
+# read reply characters from previously created socket into string, print string
+# modifiedMessage, serverAddress = clientSocket.recvfrom(2048)
+# print("From server: ", modifiedMessage.decode())
+
 
