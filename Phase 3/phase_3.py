@@ -36,7 +36,7 @@ class Server(Thread):
         self.server_socket.bind(address)
         self.packet_size = 1024
         self.data_err = data_err
-        self.image = "images/penguin.bmp"
+        self.image = "penguin.bmp"
 
     def send_image(self):
         packet = b''
@@ -75,7 +75,6 @@ class Client(Thread):
         self.client_socket.settimeout(2)
         self.packet_size = 1024
         self.ack_err = ack_err
-        self.image = "images/evil_penguin.bmp"
 
     def recv_img(self):
         data = b''
