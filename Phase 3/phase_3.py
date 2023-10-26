@@ -99,7 +99,7 @@ class Server(Thread):
                 self.server_socket.sendto(packet, self.client_address)
 
                 if counter > 0:
-
+                    # ACK = self.server_socket.recv(self.packet_size)
                     #only once the file size has been transmitted do we start probing for acknowledgements and incrementing sequence numbers.
                      #ACK = self.server_socket.recv(self.packet_size)
 
@@ -111,6 +111,11 @@ class Server(Thread):
                      #        self.server_socket.sendto(packet, self.client_address)
                       #       ACK = self.server_socket.recv(self.packet_size)
 
+                     ACK = self.server_socket.recv(self.packet_size)
+
+                     if (ACK.decode() == "fail"):
+                         self.server_socket.sendto(packet, self.client_address) #TODO: Investigate & verify if this is working...
+                         ACK = self.server_socket.recv(self.packet_size)
                      if seqN == 0:
                         seqN += 1  # if sequence number was 0 at the time of the send, cycle it to one
                      else:
