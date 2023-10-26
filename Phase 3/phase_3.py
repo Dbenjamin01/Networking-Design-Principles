@@ -6,6 +6,7 @@ import argparse
 import os
 import math
 import random
+import pickle
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-a", "--ack", type=int, default=0)
@@ -13,30 +14,32 @@ parser.add_argument("-d", "--data", type=int, default=0)
 
 
 class Packet():
+
+    def __init__(self, imagebytes, seqn, checksum):
+        self._imagebytes = imagebytes
+        self._seqN = seqn
+        self._checksum = checksum
     def build(self, curr : bytes, seqn, cs):
         # sequence number & check sum are both integers
-        packetsize = sys.getsizeof((curr))
-        packetsize = sys.getsizeof(str(curr))
-        packetsize = sys.getsizeof(bytes(curr))
-        seqnsize = sys.getsizeof(str(curr))
-        cssize = sys.getsizeof(str(curr))
+        # packetsize = sys.getsizeof((curr))
+        # packetsize = sys.getsizeof(str(curr))
+        # packetsize = sys.getsizeof(bytes(curr))
+        # seqnsize = sys.getsizeof(str(curr))
+        # cssize = sys.getsizeof(str(curr))
         # msg = curr + ":" + seqn + ":" + cs
         # msgsize = sys.getsizeof(msg)
-        msg = str(curr) + ":" + str(seqn)+ ":" + str(cs) # convert all 3 points of data into strings, separated by a delimiter (in this case, ":")
+        # msg = str(curr) + ":" + str(seqn)+ ":" + str(cs) # convert all 3 points of data into strings, separated by a delimiter (in this case, ":")
         # msgsize = sys.getsizeof(msg)
-        return msg
+
+        packet = Packet(curr, seqn, cs)
+        data = pickle.dumps(packet)
+
+        return data
         pass
-    def extract(self, packet : bytes):
+    def extract(self, packet):
         # use delimiter to separate the data within the packet
-        delimit = (bytes.decode(packet).split(":"))
-
-        p = delimit[0]
-        sizep = sys.getsizeof(p)
-        sizep = sys.getsizeof(bytes(p, 'raw_unicode_escape'))
-        seqn = delimit[1]
-        cs = delimit[2]
-
-        return p,seqn,cs
+        packet = pickle.loads(packet)
+        return packet._imagebytes, packet._seqN, packet._checksum
         pass
 
     def checksum(self, msg: bytes, seq):
@@ -50,6 +53,17 @@ class Packet():
             msg = msg >> 16
         return ~csum & 0xffff
 
+    def getACK(self, cs, calcCS):
+        ack = 0;
+        if cs == calcCS:
+            #checksum passed, send positive ACK
+            ack = 1
+        else:
+            #checksum failed, send negative ACK
+            ack = 0
+
+        return ack
+        pass
 class Server(Thread):
     def __init__(self, data_err):
         Thread.__init__(self)
@@ -67,7 +81,8 @@ class Server(Thread):
         err_pkts = []
         counter = 0
         seqN = 0
-        p = Packet()
+        cs = 0
+        p = Packet(packet, seqN, cs)
         with open(self.image, 'rb') as img:
             num_pkts = str(int(math.ceil(os.fstat(img.fileno()).st_size / self.packet_size))).encode()
             # List of packets when to send bad data:
@@ -82,10 +97,24 @@ class Server(Thread):
                     break
 
                 self.server_socket.sendto(packet, self.client_address)
-                if seqN == 0:
-                    seqN += 1 # if sequence number was 0 at the time of the send, cycle it to one
-                else:
-                    seqN -= 1 # vice-versa, if the sequence number was 1, cycle it back to zero
+
+                if counter > 0:
+
+                    #only once the file size has been transmitted do we start probing for acknowledgements and incrementing sequence numbers.
+                     #ACK = self.server_socket.recv(self.packet_size)
+
+                     #if (ACK.decode() == "pass"):
+                     #    continue
+                     #else:
+                     #    while ACK.decode() == "fail":
+                             # resend data until server receives positive ACK from client.
+                     #        self.server_socket.sendto(packet, self.client_address)
+                      #       ACK = self.server_socket.recv(self.packet_size)
+
+                     if seqN == 0:
+                        seqN += 1  # if sequence number was 0 at the time of the send, cycle it to one
+                     else:
+                        seqN -= 1  # vice-versa, if the sequence number was 1, cycle it back to zero
                 """
                 Add recv for ACK, if bad rerun iteration without updating packet
 
@@ -94,7 +123,7 @@ class Server(Thread):
                 # Change to new packet making function
                 packet = img.read(self.packet_size)
                 # size = sys.getsizeof(packet)  # get size of packet to determine threshold on socket
-                packet = p.build(packet, seqN, p.checksum(packet, seqN)).encode()
+                packet = p.build(packet, seqN, (p.checksum(packet, seqN)))
                 # size = sys.getsizeof(newpacket) # get size of packet to determine threshold on socket
 
                 if counter in err_pkts:
@@ -129,7 +158,10 @@ class Client(Thread):
 
     def recv_img(self):
         data = b''
-        p = Packet()
+        imagebytes = 0
+        cs = 0
+        seqn = 0
+        p = Packet(imagebytes, seqn, cs)
         len = 0
         counter = 0
         err_pkts = []
@@ -154,9 +186,23 @@ class Client(Thread):
                 err_pkts.remove(counter) # remove from list so it doesn't loop infinitely
                 pass
             elif counter != 0: # Dont add first packet to data as it is the number of packets
-                pa, seqN, checksum = p.extract(packet)
 
-                data += pa.encode('raw_unicode_escape')
+                imagebytes, seqn, cs = p.extract(packet) # works perfectly!
+
+                localcs = p.checksum(imagebytes, seqn)
+
+                ACK = p.getACK(cs, localcs)
+
+                if ACK == 1:
+                    msg = "pass"
+                    # positive ACK, send data up and return postive ACK to server!
+                    self.client_socket.sendto(msg.encode(), self.server_address)
+                    data += imagebytes
+                else:
+                    msg = "fail"
+                    # negative ACK, send negative ACK to server & wait for re-send of data.
+                    self.client_socket.sendto(msg.encode(), self.server_address)
+            sleep(0.05)
             counter += 1 # Only increase counter on good data
 
         with open('server_to_client_image.bmp', 'wb+') as img:
