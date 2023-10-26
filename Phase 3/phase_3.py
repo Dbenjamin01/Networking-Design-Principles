@@ -113,9 +113,14 @@ class Server(Thread):
 
                      ACK = self.server_socket.recv(self.packet_size)
 
+
                      if (ACK.decode() == "fail"):
-                         self.server_socket.sendto(packet, self.client_address) #TODO: Investigate & verify if this is working...
-                         ACK = self.server_socket.recv(self.packet_size)
+                         print("fail on loop")
+                         print(counter)
+                         while ACK.decode() == "fail":
+                            self.server_socket.sendto(packet, self.client_address) #TODO: Investigate & verify if this is working...
+                            ACK = self.server_socket.recv(self.packet_size)
+
                      if seqN == 0:
                         seqN += 1  # if sequence number was 0 at the time of the send, cycle it to one
                      else:
@@ -166,6 +171,7 @@ class Client(Thread):
         imagebytes = 0
         cs = 0
         seqn = 0
+        lastseq = 1
         p = Packet(imagebytes, seqn, cs)
         len = 0
         counter = 0
@@ -198,7 +204,7 @@ class Client(Thread):
 
                 ACK = p.getACK(cs, localcs)
 
-                if ACK == 1:
+                if ACK == 1 & (seqn != lastseq):
                     msg = "pass"
                     # positive ACK, send data up and return postive ACK to server!
                     self.client_socket.sendto(msg.encode(), self.server_address)
@@ -207,8 +213,11 @@ class Client(Thread):
                     msg = "fail"
                     # negative ACK, send negative ACK to server & wait for re-send of data.
                     self.client_socket.sendto(msg.encode(), self.server_address)
+
+                lastseq = seqn
             sleep(0.05)
             counter += 1 # Only increase counter on good data
+
 
         with open('server_to_client_image.bmp', 'wb+') as img:
             img.write(data)
