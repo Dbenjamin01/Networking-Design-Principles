@@ -72,6 +72,8 @@ class Server(Thread):
         address = (ip, port)
         self.server_socket = socket(AF_INET, SOCK_DGRAM)
         self.server_socket.bind(address)
+        # self.server_socket.setblocking(False)
+        # self.server_socket.settimeout(5)
         self.packet_size = 1024
         self.data_err = data_err / 100
         self.image = "penguin.bmp"
@@ -95,6 +97,9 @@ class Server(Thread):
                 if counter == int(num_pkts) + 1:
                     # print("SERVER | Recursion Detected, aborting loop")
                     break
+                if counter == 322:
+                    print("investigate here")
+
 
                 self.server_socket.sendto(packet, self.client_address)
 
@@ -141,6 +146,7 @@ class Server(Thread):
                     err_pkts.remove(counter) # remove from list so it doesn't loop infinitely
                     pass
                 counter += 1 # Only increase counter on good ACK
+                print("SERVER:", counter)
                 sleep(0.05)
 
 
@@ -195,6 +201,9 @@ class Client(Thread):
             if counter in err_pkts:
                 # Switch to bad seqnum (NACK)
                 err_pkts.remove(counter) # remove from list so it doesn't loop infinitely
+                msg = "fail"
+                # negative ACK, send negative ACK to server & wait for re-send of data.
+                self.client_socket.sendto(msg.encode(), self.server_address)
                 pass
             elif counter != 0: # Dont add first packet to data as it is the number of packets
 
@@ -209,15 +218,21 @@ class Client(Thread):
                     # positive ACK, send data up and return postive ACK to server!
                     self.client_socket.sendto(msg.encode(), self.server_address)
                     data += imagebytes
+
+                    # move counter location to only increment on successful ACK
+                    counter += 1  # Only increase counter on good data
                 else:
                     msg = "fail"
                     # negative ACK, send negative ACK to server & wait for re-send of data.
                     self.client_socket.sendto(msg.encode(), self.server_address)
 
                 lastseq = seqn
-            sleep(0.05)
-            counter += 1 # Only increase counter on good data
 
+            sleep(0.05)
+
+            if (counter == 0):
+                counter += 1
+            print("CLIENT: ", counter)
 
         with open('server_to_client_image.bmp', 'wb+') as img:
             img.write(data)
@@ -228,7 +243,7 @@ class Client(Thread):
         print("CLIENT | Client is up, sending request to server")
         self.client_socket.sendto("download".encode(), self.server_address)
         self.recv_img()
-        self.client_socket.close()
+        # self.client_socket.close()
 
 if __name__ == "__main__":
     args = parser.parse_args()
