@@ -7,6 +7,7 @@ import os
 import math
 import random
 import pickle
+import time
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-a", "--ack", type=int, default=0)
@@ -78,6 +79,16 @@ class Server(Thread):
         self.data_err = data_err / 100
         self.image = "penguin.bmp"
 
+    def corruptPacket(self, packet):
+        # corrupt packet here through bitwise operation, likely can just flip the bits
+
+        test = bytes(packet[0] & 0xff)# flip the bit
+
+        # bytes are immutable; meaning, once they are created, they cannot be changed
+        corruptpacket = bytearray(packet)
+        corruptpacket[0] = (corruptpacket[0] & 0x0)
+
+        return corruptpacket
     def send_image(self):
         packet = b''
         err_pkts = []
@@ -88,18 +99,16 @@ class Server(Thread):
         with open(self.image, 'rb') as img:
             num_pkts = str(int(math.ceil(os.fstat(img.fileno()).st_size / self.packet_size))).encode()
             # List of packets when to send bad data:
-            # err_pkts = random.sample(range(1, num_pkts + 1), int(num_pkts * self.data_err))
+            err_pkts = random.sample(range(1, int(num_pkts) + 1), int(int(num_pkts) * self.data_err))
             # Need new packet making function with seqnum and checksum
             packet = num_pkts
             print("SERVER | Sending image packets...")
+            start_time = time.time()
             while packet:
 
                 if counter == int(num_pkts) + 1:
                     # print("SERVER | Recursion Detected, aborting loop")
                     break
-                if counter == 322:
-                    print("investigate here")
-
 
                 self.server_socket.sendto(packet, self.client_address)
 
@@ -138,19 +147,25 @@ class Server(Thread):
                 # Change to new packet making function
                 packet = img.read(self.packet_size)
                 # size = sys.getsizeof(packet)  # get size of packet to determine threshold on socket
-                packet = p.build(packet, seqN, (p.checksum(packet, seqN)))
-                # size = sys.getsizeof(newpacket) # get size of packet to determine threshold on socket
-
                 if counter in err_pkts:
                     # Corrupt the data
+                    print("SERVER | Corrupting Packet ", counter)
+                    self.corruptPacket(packet)
+                    packet = p.build(self.corruptPacket(packet), seqN, (p.checksum(packet, seqN)))
                     err_pkts.remove(counter) # remove from list so it doesn't loop infinitely
-                    pass
+                else:
+                    packet = p.build(packet, seqN, (p.checksum(packet, seqN)))
+                # size = sys.getsizeof(newpacket) # get size of packet to determine threshold on socket
+
                 counter += 1 # Only increase counter on good ACK
                 print("SERVER:", counter)
                 sleep(0.05)
 
 
         print("SERVER | Transmission completed")
+        end_time = time.time()
+
+        print("Server Time: ", end_time - start_time)
         img.close()
 
     def run(self):
