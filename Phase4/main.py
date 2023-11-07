@@ -1,3 +1,4 @@
+import threading
 from socket import *
 from threading import Thread
 from time import sleep
@@ -11,24 +12,6 @@ parser = argparse.ArgumentParser()
 parser.add_argument("-a", "--ack", type=int, default=0)
 parser.add_argument("-d", "--data", type=int, default=0)
 
-class Timer(Thread):
-
-    def __init__(self):
-        Thread.__init__(self)
-        pass
-
-    def runTimer(self):
-        start_time = time.time()
-
-        end_time = time.time()
-
-        while (((end_time - start_time) < 0.025)):
-            end_time = time.time()  # constantly get cpu-time and re-compare it to start time until the value
-                                    # is greater than or equal to 0.025 (window-size)
-        return (end_time - start_time)
-
-    def run(self):
-        self.runTimer()
 class Packet():
 
     def __init__(self, imagebytes, seqn, checksum):
@@ -91,6 +74,18 @@ class Server(Thread):
             pass
 
         return corruptpacket
+
+    def run_timer(self):
+        start_time = time.time()
+
+        end_time = time.time()
+
+        while (end_time - start_time < 0.025):
+            end_time = time.time()  # constantly get cpu-time and re-compare it to start time until the value
+            # is greater than or equal to 0.025 (window-size)
+
+        # print("Timer done")
+        return end_time - start_time
     def send_image(self):
         packet = b''
         err_pkts = []
@@ -98,14 +93,13 @@ class Server(Thread):
         seqN = 0
         cs = 0
         p = Packet(packet, seqN, cs)
-        timer = Timer()
         with open(self.image, 'rb') as img:
             num_pkts = str(int(math.ceil(os.fstat(img.fileno()).st_size / self.packet_size))).encode()
             # List of packets when to send bad data:
             err_pkts = random.sample(range(1, int(num_pkts) + 1), int(int(num_pkts) * self.data_err))
             packet = num_pkts
             print("SERVER | Sending image packets...")
-            start_time = time.time()
+            start_time = time.time() #  THIS IS NOT FOR THE TIMER. THIS IS A SEPARATE PROCESS TO CHECK PROGRAM RUNTIME
 
             while packet:
 
@@ -117,8 +111,11 @@ class Server(Thread):
                 if counter > 0:
                     #  Only once the file size has been transmitted do we start probing
                     #  for acknowledgements and incrementing sequence numbers
+                    timer = threading.Thread(target = self.run_timer()) #  Create thread that executes timer
 
                     ACK = self.server_socket.recv(self.packet_size)
+
+
 
                     if ACK.decode() == "fail":
                         while ACK.decode() == "fail":
