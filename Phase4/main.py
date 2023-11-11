@@ -43,15 +43,7 @@ class Packet():
         return ~csum & 0xffff
 
     def getACK(self, cs, calcCS):
-        ack = 0
-        if cs == calcCS:
-            # checksum passed, send positive ACK
-            ack = 1
-        else:
-            # checksum failed, send negative ACK
-            ack = 0
-
-        return ack
+        return 1 if cs == calcCS else 0
     
 class Timer(Thread):
     def __init__(self):
