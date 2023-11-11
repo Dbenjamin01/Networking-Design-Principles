@@ -172,7 +172,6 @@ class Server(Thread):
                     packet = p.build(packet, seqN, (p.checksum(packet, seqN)))
 
                 counter += 1  # Only increase counter on good ACK
-                sleep(0.05)
 
         print("SERVER | Transmission completed")
         end_time = time() # Transmission end time
