@@ -116,6 +116,7 @@ class Server(Thread):
         counter = 0
         seqN = 0
         cs = 0
+        retransmit = 0
         p = Packet(packet, seqN, cs)
         with open(self.image, 'rb') as img:
             num_pkts = str(int(math.ceil(os.fstat(img.fileno()).st_size / self.packet_size))).encode()
@@ -151,27 +152,31 @@ class Server(Thread):
                                 pass
                     
                     # Drop ACK on purpose leading to a retransmit
-                    if counter in ack_err_pkts:
+                    if counter in ack_err_pkts and counter != int(num_pkts):
                         ACK = b"fail"
                         ack_err_pkts.remove(counter)
 
                     self.timer.stop()
                     if ACK.decode() == "fail":
-                        continue
-                    
-                    seqN ^= 1
+                        retransmit = 1
+                    else:
+                        # Successful ACK iterate seqnum
+                        seqN ^= 1
                 
                 # Reaching this point means successful ACK on previous packet, setup new packet
-                packet = img.read(self.packet_size)
-                if counter in err_pkts:
+                if retransmit:
+                    retransmit = 0
+                    packet = p.build(data, seqN, (p.checksum(data, seqN)))
+                elif counter in err_pkts:
                     # Corrupt the data
-                    self.corruptPacket(packet)
-                    packet = p.build(self.corruptPacket(packet), seqN, (p.checksum(packet, seqN)))
+                    packet = p.build(b"".join([data[0:1023], b"\0x00"]), seqN, (p.checksum(data, seqN)))
                     err_pkts.remove(counter)  # remove from list so it doesn't loop infinitely
+                    data = img.read(self.packet_size) # Grab data for next iteration retransmit
+                    counter += 1
                 else:
-                    packet = p.build(packet, seqN, (p.checksum(packet, seqN)))
-
-                counter += 1  # Only increase counter on good ACK
+                    data = img.read(self.packet_size)
+                    packet = p.build(data, seqN, (p.checksum(data, seqN)))
+                    counter += 1  # Only increase counter on good ACK
 
         print("SERVER | Transmission completed")
         end_time = time() # Transmission end time
@@ -212,11 +217,15 @@ class Client(Thread):
         len = 0
         counter = 0
         err_pkts = []
+        retransmit = 0
         while True:
             if counter == (len + 1):
                 break
-
-            packet = self.client_socket.recv(self.packet_size)
+            try:
+                packet = self.client_socket.recv(self.packet_size)
+            except:
+                print("timeout exit")
+                break
             """
             Need to extract proper data from the packet: data, seqnum, checksum
             Check for bad seqnum and bad checksum 
@@ -245,17 +254,20 @@ class Client(Thread):
 
                 localcs = p.checksum(imagebytes, seqn)
 
-                ACK = p.getACK(cs, localcs)
+                ack = p.getACK(cs, localcs)
 
-                if ACK == 1 & (seqn != lastseq):
+                if not ack:
+                    retransmit = 1
+
+                if (ack == 1 and (seqn != lastseq)) or (ack == 1 and retransmit):
                     msg = "pass"
                     # positive ACK, send data up and return postive ACK to server!
                     self.client_socket.sendto(msg.encode(), self.server_address)
                     data += imagebytes
-
+                    retransmit = 0
                     # move counter location to only increment on successful ACK
                     counter += 1  # Only increase counter on good data
-                elif ACK == 1 & (seqn == lastseq):
+                elif ack == 1 and (seqn == lastseq) and (retransmit != 1):
                     msg = "pass"
                     # Duplicate packet detection send positive ACK but dont add data and dont iterate counter
                     self.client_socket.sendto(msg.encode(), self.server_address)
