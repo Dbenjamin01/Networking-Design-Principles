@@ -99,17 +99,6 @@ class Server(Thread):
         self.timer.set_limit(0.05)
         self.timer.start()
 
-    def corruptPacket(self, packet):
-        # bytes are immutable; meaning, once they are created, they cannot be changed
-        try:
-            corruptpacket: bytearray = bytearray(packet)
-            corruptpacket[0] = (corruptpacket[0] & 0x0)
-
-        except IndexError:
-            pass
-
-        return corruptpacket
-
     def send_image(self):
         packet = b''
         err_pkts = []
@@ -163,15 +152,15 @@ class Server(Thread):
                         # Successful ACK iterate seqnum
                         seqN ^= 1
                 
-                # Reaching this point means successful ACK on previous packet, setup new packet
+                # Setup next packet or retransmit previous data
                 if retransmit:
                     retransmit = 0
                     packet = p.build(data, seqN, (p.checksum(data, seqN)))
                 elif counter in err_pkts:
-                    # Corrupt the data
+                    data = img.read(self.packet_size)
+                    # Corrupt the data but give checksum with good data
                     packet = p.build(b"".join([data[0:1023], b"\0x00"]), seqN, (p.checksum(data, seqN)))
                     err_pkts.remove(counter)  # remove from list so it doesn't loop infinitely
-                    data = img.read(self.packet_size) # Grab data for next iteration retransmit
                     counter += 1
                 else:
                     data = img.read(self.packet_size)
