@@ -1,0 +1,368 @@
+import threading
+from socket import *
+from threading import Thread
+from time import sleep, time
+import argparse
+import os
+import math
+import random
+import pickle
+
+parser = argparse.ArgumentParser()
+parser.add_argument("-a", "--ack", type=int, default=0)
+parser.add_argument("-d", "--data", type=int, default=0)
+parser.add_argument("-w", "--win_s", type=int, default=0)
+parser.add_argument("-al", "--ackloss", type=int, default=0)
+parser.add_argument("-dl", "--dataloss", type=int, default=0)
+
+
+class Packet():
+
+    def __init__(self, imagebytes, seqn, checksum):
+        self._imagebytes = imagebytes
+        self._seqN = seqn
+        self._checksum = checksum
+
+    def build(self, curr: bytes, seqn, cs):
+        packet = Packet(curr, seqn, cs)
+        data = pickle.dumps(packet)
+
+        return data
+
+    def extract(self, packet):
+        # use delimiter to separate the data within the packet
+        packet = pickle.loads(packet)
+        return packet._imagebytes, packet._seqN, packet._checksum
+
+    def checksum(self, msg: bytes, seq):
+        msg = int.from_bytes(msg, "big")
+        carry_add = lambda a, b: ((a + b) & 0xffff) + ((a + b) >> 16)
+        csum = 0
+        csum = carry_add(csum, seq)
+        while msg != 0:
+            bits = msg & 0xffff
+            csum = carry_add(csum, bits)
+            msg = msg >> 16
+        return ~csum & 0xffff
+
+    def getACK(self, cs, calcCS):
+        return 1 if cs == calcCS else 0
+
+
+class Timer(Thread):
+    def __init__(self):
+        Thread.__init__(self)
+        self.limit = 0
+        self.stopped = 1
+        self.status = 0  # Timer status - 1: expired, 0: else
+        self.terminated = 0
+
+    def set_limit(self, limit):
+        self.limit = limit
+
+    def stop(self):
+        self.stopped = 1
+
+    def get_status(self):
+        return self.status
+
+    def terminate(self):
+        self.terminated = 1
+
+    def restart(self):
+        self.stopped = 0
+        self.status = 0
+        self.time_start = time()
+
+    def run(self):
+        self.time_start = time()
+        while not self.terminated:
+            if not self.stopped:
+                elapsed = time() - self.time_start
+                if elapsed >= self.limit:
+                    self.stopped = 1
+                    self.status = 1
+            else:
+                pass
+            sleep(0.0001)  # Needed for other threads to run properly
+
+
+class Server(Thread):
+    def __init__(self, data_err, ack_err, win_s):
+        Thread.__init__(self)
+        ip = '127.0.0.1'
+        port = 12000
+        address = (ip, port)
+        self.server_socket = socket(AF_INET, SOCK_DGRAM)
+        self.server_socket.bind(address)
+        self.packet_size = 1024
+        self.data_err = data_err / 100
+        self.ack_err = ack_err / 100
+        self.win_s = win_s
+        self.image = "penguin.bmp"
+        self.timer = Timer()
+        self.timer.set_limit(0.05)
+        self.timer.start()
+
+    def send_image(self):
+        packet = b''
+        windowSize = self.win_s # specified window size @ command line
+        Window = [] # Window that holds the segments (will be holding packets grabbed from image
+        print(f"Window size: {windowSize}")
+        err_pkts = []
+        counter = 0
+        seqN = 0
+        cs = 0
+        retransmit = 0
+        p = Packet(packet, seqN, cs)
+        with open(self.image, 'rb') as img:
+            num_pkts = str(int(math.ceil(os.fstat(img.fileno()).st_size / self.packet_size))).encode()
+            # List of packets when to send bad data:
+            err_pkts = random.sample(range(1, int(num_pkts) + 1), int(int(num_pkts) * self.data_err))
+            ack_err_pkts = random.sample(range(1, int(num_pkts) + 1), int(int(num_pkts) * self.ack_err))
+            packet = num_pkts
+            proceed = 1
+            print("SERVER | Sending image packets...")
+            start_time = time()  # Transmission start time
+
+            if windowSize > 0: #TODO - Transmission with specified window
+
+                self.server_socket.sendto(packet, self.client_address) # send number of packets required to fully transmit image first
+
+                while proceed == 1: #proceed flag is set to 1 so it can, at minimum, begin the loop
+
+                    if counter == (int(num_pkts) / windowSize) - 1:
+                        break
+
+                    proceed = 0 # reset proceed flag
+
+                    # <editor-fold desc="Get N Packets & Add them to window">
+                    for segment in range(windowSize):  # For-loop based on window size
+
+                        # <editor-fold desc="Accumulate Data & Construct Packet">
+                        data = img.read(self.packet_size)  # get raw data from the image
+                        seqN = segment
+                        packet = p.build(data, seqN, (p.checksum(data, seqN)))
+                        # </editor-fold>
+
+                        Window.append(packet)  # add packet to 'window' list
+                    # </editor-fold>
+
+                    # <editor-fold desc="Loop to send stored frames to client">
+                    for frame in Window:
+                        self.server_socket.sendto(frame, self.client_address)
+                    # </editor-fold>
+
+                    # <editor-fold desc="Loop to receive ACKs from client">
+                    for segment in range(windowSize):
+                        ACK = self.server_socket.recv(self.packet_size)
+
+                        if int(ACK.decode()) == (windowSize - 1):  # Cumulative ACK received... can shift window by windowsize
+                            proceed = 1
+                            print("Window successfully sent")
+                            counter += 1
+                        else:
+                            proceed = 0
+                    # </editor-fold>
+            else:
+                while packet:  # Transmission without window
+
+                    if counter >= int(num_pkts) + 1:
+                        break
+
+                    self.server_socket.sendto(packet, self.client_address)
+
+                    if counter > 0:
+                        #  Only once the file size has been transmitted do we start probing
+                        #  for acknowledgements and incrementing sequence numbers
+                        self.timer.restart()
+
+                        # Will keep attempting to receive data until the timer runs out, after that set ACK to fail and retransmit
+                        while True:
+                            try:
+                                ACK = self.server_socket.recv(self.packet_size)
+                                break
+                            except:
+                                if self.timer.get_status():
+                                    ACK = b"fail"
+                                    break
+                                else:
+                                    pass
+
+                        # Drop ACK on purpose leading to a retransmit
+                        if counter in ack_err_pkts and counter != int(num_pkts):
+                            ACK = b"fail"
+                            ack_err_pkts.remove(counter)
+
+                        self.timer.stop()
+                        if ACK.decode() == "fail":
+                            retransmit = 1
+                        else:
+                            # Successful ACK iterate seqnum
+                            seqN ^= 1
+
+                    # Setup next packet or retransmit previous data
+                    if retransmit:
+                        retransmit = 0
+                        packet = p.build(data, seqN, (p.checksum(data, seqN)))
+                    elif counter in err_pkts:
+                        data = img.read(self.packet_size)
+                        # Corrupt the data but give checksum with good data
+                        packet = p.build(b"".join([data[0:1023], b"\0x00"]), seqN, (p.checksum(data, seqN)))
+                        err_pkts.remove(counter)  # remove from list so it doesn't loop infinitely
+                        counter += 1
+                    else:
+                        data = img.read(self.packet_size)
+                        packet = p.build(data, seqN, (p.checksum(data, seqN)))
+                        counter += 1  # Only increase counter on good ACK
+
+
+        print("SERVER | Transmission completed")
+        end_time = time()  # Transmission end time
+        print("Completion Time: ", end_time - start_time)
+        img.close()
+        self.timer.terminate()
+        self.timer.join()
+
+    def run(self):
+        print("SERVER | Server is up, awaiting client request")
+        msg, self.client_address = self.server_socket.recvfrom(self.packet_size)
+        if msg.decode() == "download":
+            print("SERVER | Download request, sending image")
+            # Set builtin socket timeout lower than our thread timer so the try/except actually goes off
+            self.server_socket.settimeout(0.01)
+            self.send_image()
+        self.server_socket.close()
+
+
+class Client(Thread):
+    def __init__(self, ack_err, data_err, win_s):
+        Thread.__init__(self)
+        ip = '127.0.0.1'
+        port = 12000
+        self.server_address = (ip, port)
+        self.client_socket = socket(AF_INET, SOCK_DGRAM)
+        self.client_socket.settimeout(2)
+        self.packet_size = 4500
+        self.ack_err = ack_err / 100
+        self.data_err = data_err / 100
+        self.win_s = win_s
+    def recv_img(self):
+        data = b''
+        windowsize = self.win_s
+        imagebytes = 0
+        cs = 0
+        seqn = 0
+        lastseq = 1
+        p = Packet(imagebytes, seqn, cs)
+        len = 0
+        counter = 0
+        err_pkts = []
+        retransmit = 0
+
+        if windowsize > 0: #TODO - Create client-side method for sending ACK in Go-Back-N format/method
+            packet = self.client_socket.recv(self.packet_size) # receive number of packets required to rebuild image first
+            len = int(packet.decode())
+            while True:
+                if counter == (len / windowsize) - 1:
+                    break
+
+                for frame in range(windowsize):
+                    packet = self.client_socket.recv(self.packet_size)  # get packet from socket
+
+                    imagebytes, seqn, cs = p.extract(packet)  # get data from packet
+
+                    localcs = p.checksum(imagebytes, seqn)  # get checksum (local to client)
+
+                    ack = p.getACK(cs, localcs)  # compare checksum from server to local checksum
+
+                    if ack:  # if ack returns pass
+                        data += imagebytes
+                        msg = str(frame)  # frame is an integer relating to the index of the segment within the window
+                        self.client_socket.sendto(msg.encode(), self.server_address)
+
+                counter += 1
+
+        else:
+            while True:
+                if counter == (len + 1):
+                    break
+                try:
+                    packet = self.client_socket.recv(self.packet_size)
+                except:
+                    print("timeout exit")
+                    break
+                """
+                Need to extract proper data from the packet: data, seqnum, checksum
+                Check for bad seqnum and bad checksum 
+                If bad resend ACK with bad seqnum
+                Add error on ACK just send bad seqnum
+                """
+                if len == 0:
+                    len = int(packet.decode())
+                    # List of packets to send bad ACK:
+                    err_pkts = random.sample(range(1, len + 1), int(len * self.ack_err))
+                    data_err_pkts = random.sample(range(1, len + 1), int(len * self.data_err))
+                if counter in err_pkts:
+                    # Switch to bad seqnum (NACK)
+                    err_pkts.remove(counter)  # remove from list so it doesn't loop infinitely
+                    msg = "fail"
+                    # negative ACK, send negative ACK to server & wait for re-send of data.
+                    self.client_socket.sendto(msg.encode(), self.server_address)
+                    pass
+                elif counter in data_err_pkts:
+                    # Complete packet loss do not send any ACK
+                    data_err_pkts.remove(counter)
+                    continue
+                elif counter != 0:  # Dont add first packet to data as it is the number of packets
+
+                    imagebytes, seqn, cs = p.extract(packet)  # works perfectly!
+
+                    localcs = p.checksum(imagebytes, seqn)
+
+                    ack = p.getACK(cs, localcs)
+
+                    if not ack:
+                        retransmit = 1
+
+                    if (ack == 1 and (seqn != lastseq)) or (ack == 1 and retransmit):
+                        msg = "pass"
+                        # positive ACK, send data up and return postive ACK to server!
+                        self.client_socket.sendto(msg.encode(), self.server_address)
+                        data += imagebytes
+                        retransmit = 0
+                        # move counter location to only increment on successful ACK
+                        counter += 1  # Only increase counter on good data
+                    elif ack == 1 and (seqn == lastseq) and (retransmit != 1):
+                        msg = "pass"
+                        # Duplicate packet detection send positive ACK but dont add data and dont iterate counter
+                        self.client_socket.sendto(msg.encode(), self.server_address)
+                    else:
+                        msg = "fail"
+                        # negative ACK, send negative ACK to server & wait for re-send of data.
+                        self.client_socket.sendto(msg.encode(), self.server_address)
+
+                    lastseq = seqn
+
+                if counter == 0:
+                    counter += 1
+
+        with open('server_to_client_image.bmp', 'wb+') as img:
+            img.write(data)
+        print("CLIENT | Image saved successfully")
+
+    def run(self):
+        sleep(1)
+        print("CLIENT | Client is up, sending request to server")
+        self.client_socket.sendto("download".encode(), self.server_address)
+        self.recv_img()
+
+
+if __name__ == "__main__":
+    args = parser.parse_args()
+    server = Server(args.data, args.ackloss, args.win_s)
+    client = Client(args.ack, args.dataloss, args.win_s)
+    server.start()
+    client.start()
+    server.join()
+    client.join()
