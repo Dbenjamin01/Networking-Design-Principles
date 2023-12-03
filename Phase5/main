@@ -139,6 +139,7 @@ class Server(Thread):
         seqN = 0
         cs = 0
         retransmit = 0
+        numdatapulls = 0
         # recvthread = Thread(target=self.recWindowedACK, args=[windowSize])  # init thread
         firepackets = Thread(target=self.firePackets, args=[Window])  # init thread
         firepackets.start()
@@ -202,10 +203,14 @@ class Server(Thread):
                     self.timer.restart() # start timer after firing off first packet
 
                     for seq in range(windowSize):
-                        data = img.read(self.packet_size)  # get raw data from the image
-                        seqN = seq
-                        packet = p.build(data, seqN, (p.checksum(data, seqN)))
-                        self.server_socket.sendto(packet, self.client_address)
+                        if (numdatapulls >= int(num_pkts)):
+                            pass
+                        else:
+                            data = img.read(self.packet_size)  # get raw data from the image
+                            numdatapulls += 1  # increment to count how many times we've pulled from data from the image
+                            seqN = seq
+                            packet = p.build(data, seqN, (p.checksum(data, seqN)))
+                            self.server_socket.sendto(packet, self.client_address)
                         # self.server_socket.sendto(frame, self.client_address)
 
                     self.timer.restart()
@@ -329,6 +334,7 @@ class Client(Thread):
         counter = 0
         err_pkts = []
         retransmit = 0
+        numFrames = 0
 
         if windowsize > 0: #TODO - Create client-side method for sending ACK in Go-Back-N format/method
             packet = self.client_socket.recv(self.packet_size) # receive number of packets required to rebuild image first
@@ -336,20 +342,26 @@ class Client(Thread):
 
             while True:
 
-                if counter == (len / windowsize):
+                if counter >= (len / windowsize):
                     break
 
                 for frame in range(windowsize):
-                    packet = self.client_socket.recv(self.packet_size)  # get packet from socket
-                    imagebytes, seqn, cs = p.extract(packet)  # get data from packet
-                    localcs = p.checksum(imagebytes, seqn)  # get checksum (local to client)
 
-                    ack = p.getACK(cs, localcs)  # compare checksum from server to local checksum
+                    if (numFrames >= len):
+                        pass
+                    else:
+                        packet = self.client_socket.recv(self.packet_size)  # get packet from socket
+                        imagebytes, seqn, cs = p.extract(packet)  # get data from packet
+                        localcs = p.checksum(imagebytes, seqn)  # get checksum (local to client)
 
-                    if ack:  # if ack returns pass
-                        data += imagebytes
-                        msg = str(frame)  # frame is an integer relating to the index of the segment within the window
-                        self.client_socket.sendto(msg.encode(), self.server_address)
+                        ack = p.getACK(cs, localcs)  # compare checksum from server to local checksum
+
+                        if ack:  # if ack returns pass
+                            data += imagebytes
+                            msg = str(
+                                frame)  # frame is an integer relating to the index of the segment within the window
+                            self.client_socket.sendto(msg.encode(), self.server_address)
+                        numFrames += 1
 
                 counter += 1
 
