@@ -133,7 +133,7 @@ class Server(Thread):
         packet = b''
         windowSize = self.win_s # specified window size @ command line
         Window = [] # Window that holds the segments (will be holding packets grabbed from image
-        print(f"Window size: {windowSize}")
+        print(f"SERVER | Window size: {windowSize}")
         err_pkts = []
         counter = 0
         seqN = 0
@@ -183,8 +183,9 @@ class Server(Thread):
                         break
 
                     proceed = 0 # reset proceed flag
-
+                    '''
                     # <editor-fold desc="Get N Packets & Add them to window">
+                    
                     for segment in range(windowSize):  # For-loop based on window size
 
                         # <editor-fold desc="Accumulate Data & Construct Packet">
@@ -195,10 +196,19 @@ class Server(Thread):
 
                         Window.append(packet)  # add packet to 'window' list
                     # </editor-fold>
-
+                    '''
                     # <editor-fold desc="Loop to send stored frames to client & await response">
-                    firepackets.run() # creates thread for function 'firePackets' function
+                    # firepackets.run() # creates thread for function 'firePackets' function
                     self.timer.restart() # start timer after firing off first packet
+
+                    for seq in range(windowSize):
+                        data = img.read(self.packet_size)  # get raw data from the image
+                        seqN = seq
+                        packet = p.build(data, seqN, (p.checksum(data, seqN)))
+                        self.server_socket.sendto(packet, self.client_address)
+                        # self.server_socket.sendto(frame, self.client_address)
+
+                    self.timer.restart()
 
                     while True:
                         try:
@@ -217,7 +227,7 @@ class Server(Thread):
                                 break
                             else:
                                 pass
-                            
+
                     self.timer.stop()
 
 
