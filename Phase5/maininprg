@@ -139,6 +139,8 @@ class Server(Thread):
         cs = 0
         retransmit = 0
         numdatapulls = 0
+        recvacks = []  # array of ACKs we received (to be flushed after each transmission)
+        interestack = -1
         # recvthread = Thread(target=self.recWindowedACK, args=[windowSize])  # init thread
         firepackets = Thread(target=self.firePackets, args=[Window])  # init thread
         firepackets.start()
@@ -186,20 +188,6 @@ class Server(Thread):
                         break
 
                     proceed = 0  # reset proceed flag
-                    '''
-                    # <editor-fold desc="Get N Packets & Add them to window">
-
-                    for segment in range(windowSize):  # For-loop based on window size
-
-                        # <editor-fold desc="Accumulate Data & Construct Packet">
-                        data = img.read(self.packet_size)  # get raw data from the image
-                        seqN = segment
-                        packet = p.build(data, seqN, (p.checksum(data, seqN)))
-                        # </editor-fold>
-
-                        Window.append(packet)  # add packet to 'window' list
-                    # </editor-fold>
-                    '''
                     # <editor-fold desc="Loop to send stored frames to client & await response">
                     # firepackets.run() # creates thread for function 'firePackets' function
                     self.timer.restart()  # start timer after firing off first packet
@@ -211,6 +199,7 @@ class Server(Thread):
                             # <editor-fold desc="Induce packet error and send">
                             if (counter in err_pkts):
                                 data = img.read(self.packet_size)
+                                windowData.append(data)
                                 numdatapulls += 1
                                 # Corrupt the data but give checksum with good data
                                 packet = p.build(b"".join([data[0:1023], b"\0x00"]), seqN, (p.checksum(data, seqN)))
@@ -224,7 +213,14 @@ class Server(Thread):
                             else:
                                 if ackgrppass == 0:
                                     # instead of reading new data from the image, access previously used data
-                                    data = windowData[seq]  # re-access old data
+
+                                    for x in range(windowSize - int(interestack)):
+                                        data = windowData[x + int(interestack)]  # re-access old data
+
+                                    # window of 5 = 0 1 2 3 4
+                                    # failure at 2 = 0 1 2 2 2
+                                    # ack of interest = 2
+
                                 else:
                                     data = img.read(self.packet_size)  # get raw data from the image
                                     windowData.append(data)  # append raw data
@@ -241,15 +237,15 @@ class Server(Thread):
 
                     while True:
                         try:
-
                             numacks = 0
+                            while (numacks != windowSize - int(interestack)):
 
-                            while (numacks != windowSize):
                                 ACK = self.server_socket.recv(self.packet_size)
+                                recvacks.append(ACK)
                                 numacks += 1
                             proceed = 1  # proceed flag for larger group
                             ackgrppass = 1  # ACKS (group) pass flag
-                            windowData.clear()  # clear data from the window
+
                             break
                         except:
                             if self.timer.get_status():
@@ -261,7 +257,23 @@ class Server(Thread):
                                 pass
 
                     self.timer.stop()
+                    # </editor-fold>
 
+                    # <editor-fold desc="Determine resend">
+                    if int(recvacks[len(recvacks) - 1]) != (windowSize - 1):
+                        #  indicative of error
+                        interestack = recvacks[windowSize - 1]  #identify the ACK that we need to resend the remaining packets from in the event of failure\
+                        counter = counter - int(interestack)  # modify counter to move backwards
+                        ackgrppass = 0
+                        proceed = 1  # proceed flag for larger group
+                        recvacks.clear()
+                    else:
+                        windowData.clear()  # clear data from the window
+                        recvacks.clear()
+                        ackgrppass = 1
+                        interestack = 0
+                        proceed = 1  # proceed flag for larger group
+                        print("Loop completed")
                     # </editor-fold>
 
             else:
@@ -342,7 +354,7 @@ class Client(Thread):
         port = 12000
         self.server_address = (ip, port)
         self.client_socket = socket(AF_INET, SOCK_DGRAM)
-        self.client_socket.settimeout(2)
+        self.client_socket.settimeout(100)
         self.packet_size = 4500
         self.ack_err = ack_err / 100
         self.data_err = data_err / 100
@@ -361,6 +373,8 @@ class Client(Thread):
         err_pkts = []
         retransmit = 0
         numFrames = 0
+        failflag = 0
+
 
         if windowsize > 0:  # TODO - Create client-side method for sending ACK in Go-Back-N format/method
             packet = self.client_socket.recv(
@@ -372,7 +386,10 @@ class Client(Thread):
                 if counter >= (len / windowsize):
                     break
 
+                nframe = 0  # cursor frame value when incrementing through the window of predetermined size
+                failflag = 0  # failure flag to raise in the event that one of the ACKs fails, so we know to repeatedly send the ACK (of failure)
                 for frame in range(windowsize):
+
 
                     if (numFrames >= len):
                         pass
@@ -383,11 +400,14 @@ class Client(Thread):
 
                         ack = p.getACK(cs, localcs)  # compare checksum from server to local checksum
 
-                        if ack:  # if ack returns pass
+                        if ack & failflag == 0:  # if ack returns pass
                             data += imagebytes
-                            msg = str(
-                                frame)  # frame is an integer relating to the index of the segment within the window
-                            self.client_socket.sendto(msg.encode(), self.server_address)
+                            msg = str(nframe)  # frame is an integer relating to the index of the segment within the window
+                            nframe += 1  #increment packet number for ACK
+                        else:
+                            failflag = 1  # raise flag in event of failure, this way the frame number will never increment so we resend ACK 1 over and over.
+                        self.client_socket.sendto(msg.encode(), self.server_address)  # placement of sendto will assure that we resend the same ACK in the event that the packet is bad or dropped.
+                        sleep(0.00001)
                         numFrames += 1
 
                 counter += 1
