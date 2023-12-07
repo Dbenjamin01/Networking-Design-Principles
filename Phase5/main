@@ -131,8 +131,12 @@ class Server(Thread):
 
             if windowSize > 0:  # TODO - Transmission with specified window
                 self.server_socket.sendto(packet, self.client_address)  #send initial packet info
+
                 while True:
                     #  get data from image & build packets accordingly
+
+                    datawindow.clear()
+                    packetwindow.clear()
 
                     if counter >= int(num_pkts):
                         break
@@ -143,11 +147,20 @@ class Server(Thread):
                                 numtoend = frame
                                 break
                             data = img.read(self.packet_size)  # grab data from the image
-                            datawindow.append(data)  # add the data to the window
-                            packet = p.build(data, frame, (p.checksum(data, frame)))
-                            packetwindow.append(packet)
-                            counter += 1
-                            print(counter)
+
+                            if counter in err_pkts:  #if current packet is apart of the predefined error packets, corrupt the data.
+                                # Corrupt the data but give checksum with good data
+                                datawindow.append(data)  # add uncorrupted data to window before corrupting it (allowing for future recovery)
+                                packet = p.build(b"".join([data[0:1023], b"\0x00"]), seqN, (p.checksum(data, seqN)))
+                                packetwindow.append(packet)
+                                err_pkts.remove(counter)  # remove from list so it doesn't loop infinitely
+                                counter += 1
+                            else:
+                                datawindow.append(data)  # add the data to the window
+                                packet = p.build(data, frame, (p.checksum(data, frame)))
+                                packetwindow.append(packet)
+                                counter += 1
+
 
                         for packet in packetwindow:
                             self.server_socket.sendto(packet, self.client_address)  # send each packet within the packet window to the client
@@ -166,36 +179,36 @@ class Server(Thread):
                                 resend = 1
                                 break
 
-                        datawindow.clear()
-                        packetwindow.clear()
-
                         if counter >= int(num_pkts) + 1:  # if counter (number of times we've pulled data from  file) exceeds file size
                             pass
 
 
                     if resend == 1:
-                        index = frame + backnum
+                        index = backnum
                         while ((index) < windowSize):
-                            self.server_socket.sendto(packetwindow[index], self.client_address)  # resend each packet to the client in the event of failure
+                            packet = p.build(datawindow[index], index, (p.checksum(datawindow[index], index)))
+                            self.server_socket.sendto(packet, self.client_address)  # resend each packet to the client in the event of failure
                             index += 1
 
-                        ackindex = frame + backnum
+                        ackindex = backnum
                         while (ackindex < windowSize):
                             ACK = self.server_socket.recv(self.packet_size)
 
                             if (ACK.decode() == "1"):
                                 #  ack has passed
+                                ackindex += 1  # Index of the loop, increment on pass
                                 pass
                             else:
                                 #  ack has failed
-                                backnum = ackres
+                                backnum = ackres  # 'Go-Back-N' number
                                 resend = 1
                                 break
 
-                        datawindow.clear()
-                        packetwindow.clear()
+                        datawindow.clear()  # clear data window
+                        packetwindow.clear()  # clear packet window
+                        resend = 0  # reset resend flag
 
-
+######################################################################################################################################################################################
 
             else:
                 while packet:  # Transmission without window
@@ -314,9 +327,6 @@ class Client(Thread):
 
                     ack = p.getACK(cs, localcs)
 
-                    if not ack:
-                        retransmit = 1
-
                     if ack == 1:
                         msg = "1"
                         # negative ACK, send negative ACK to server & wait for re-send of data.
@@ -332,6 +342,7 @@ class Client(Thread):
 
                 if counter == 0:
                     counter += 1
+#################################################################################################################################################################################
         else:
             while True:
                 if counter == (len + 1):
