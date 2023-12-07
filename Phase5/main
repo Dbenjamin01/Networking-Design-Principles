@@ -103,7 +103,7 @@ class Server(Thread):
         self.timer = Timer()
         self.timer.set_limit(0.05)
         self.timer.start()
-
+        self.hold_value = 0
     def send_image(self):
         packet = b''
         windowSize = self.win_s  # specified window size @ command line
@@ -113,6 +113,7 @@ class Server(Thread):
         err_pkts = []
         counter = 0
         seqN = 0
+        failnum = 0
         resend = 0
         numtoend = 0
         cs = 0
@@ -151,7 +152,7 @@ class Server(Thread):
                             if counter in err_pkts:  #if current packet is apart of the predefined error packets, corrupt the data.
                                 # Corrupt the data but give checksum with good data
                                 datawindow.append(data)  # add uncorrupted data to window before corrupting it (allowing for future recovery)
-                                packet = p.build(b"".join([data[0:1023], b"\0x00"]), seqN, (p.checksum(data, seqN)))
+                                packet = p.build(b"".join([data[0:1023], b"\0x00"]), frame, (p.checksum(data, frame)))
                                 packetwindow.append(packet)
                                 err_pkts.remove(counter)  # remove from list so it doesn't loop infinitely
                                 counter += 1
@@ -165,7 +166,7 @@ class Server(Thread):
                         for packet in packetwindow:
                             self.server_socket.sendto(packet, self.client_address)  # send each packet within the packet window to the client
 
-                        for ackres in range(windowSize - numtoend):
+                        for ackres in range(len(packetwindow)):
                             #  based on window size we have minimum number of expected ACKS
                             #  if the ACK is not what we expect, set roll back value equal to the value of ackres
                             ACK = self.server_socket.recv(self.packet_size)
@@ -175,22 +176,25 @@ class Server(Thread):
                                 pass
                             else:
                                 #  ack has failed
-                                backnum = ackres
+                                if failnum == 0:
+                                    backnum = ackres  # grab index of failure after first incident of failure.
+                                    self.hold_value = backnum
                                 resend = 1
-                                break
+                                failnum += 1
+                                #  break
 
                         if counter >= int(num_pkts) + 1:  # if counter (number of times we've pulled data from  file) exceeds file size
                             pass
 
 
                     if resend == 1:
-                        index = backnum
+                        index = self.hold_value
                         while ((index) < windowSize):
                             packet = p.build(datawindow[index], index, (p.checksum(datawindow[index], index)))
                             self.server_socket.sendto(packet, self.client_address)  # resend each packet to the client in the event of failure
                             index += 1
 
-                        ackindex = backnum
+                        ackindex = self.hold_value
                         while (ackindex < windowSize):
                             ACK = self.server_socket.recv(self.packet_size)
 
@@ -206,6 +210,8 @@ class Server(Thread):
 
                         datawindow.clear()  # clear data window
                         packetwindow.clear()  # clear packet window
+                        failnum = 0
+                        self.hold_value = 0  # reset hold value
                         resend = 0  # reset resend flag
 
 ######################################################################################################################################################################################
@@ -302,7 +308,9 @@ class Client(Thread):
         lastseq = 1
         p = Packet(imagebytes, seqn, cs)
         len = 0
+        ordercheck = []
         counter = 0
+        errorflag = 0
         err_pkts = []
         retransmit = 0
 
@@ -327,19 +335,23 @@ class Client(Thread):
 
                     ack = p.getACK(cs, localcs)
 
-                    if ack == 1:
+                    if ack == 1 and errorflag == 0:
                         msg = "1"
                         # negative ACK, send negative ACK to server & wait for re-send of data.
                         self.client_socket.sendto(msg.encode(), self.server_address)
                         data += imagebytes
+                        ordercheck.append(seqn)
                         retransmit = 0
                         # move counter location to only increment on successful ACK
                         counter += 1  # Only increase counter on good data
                     else:
                         msg = "0"
+                        errorflag = 1  # done so the client stops accepting new packets, and doesn't attempt to build to the image until go back n is deployed
                         # negative ACK, send negative ACK to server & wait for re-send of data.
                         self.client_socket.sendto(msg.encode(), self.server_address)
 
+                if seqn == (windowsize - 1):
+                    errorflag = 0  #reset error flag once it reaches the last frame of the window
                 if counter == 0:
                     counter += 1
 #################################################################################################################################################################################
@@ -406,8 +418,8 @@ class Client(Thread):
 
                 if counter == 0:
                     counter += 1
-
         with open('server_to_client_image.bmp', 'wb+') as img:
+
             img.write(data)
         print("CLIENT | Image saved successfully")
 
