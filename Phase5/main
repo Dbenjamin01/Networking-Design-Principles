@@ -171,7 +171,11 @@ class Server(Thread):
                         for ackres in range(len(packetwindow)):
                             #  based on window size we have minimum number of expected ACKS
                             #  if the ACK is not what we expect, set roll back value equal to the value of ackres
-                            ACK = self.server_socket.recv(self.packet_size)
+                            try:
+                                ACK = self.server_socket.recv(self.packet_size)
+                            except:
+                                print("Server timeout exit")
+                                break
 
                             if (ACK.decode() == "1"):
                                 #  ack has passed
@@ -199,8 +203,11 @@ class Server(Thread):
 
                             ackindex = self.hold_value
                             while (ackindex < windowSize):
-                                ACK = self.server_socket.recv(self.packet_size)
-
+                                try:
+                                    ACK = self.server_socket.recv(self.packet_size)
+                                except:
+                                    print("Server timeout exit")
+                                    break
                                 if (ACK.decode() == "1"):
                                     #  ack has passed
                                     ackindex += 1  # Index of the loop, increment on pass
@@ -336,7 +343,7 @@ class Client(Thread):
                 try:
                     packet = self.client_socket.recv(self.packet_size)
                 except:
-                    print("timeout exit")
+                    print("Client timeout exit")
                     break
 
                 if len == 0:
