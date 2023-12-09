@@ -124,8 +124,8 @@ class Server(Thread):
         with open(self.image, 'rb') as img:
             num_pkts = str(int(math.ceil(os.fstat(img.fileno()).st_size / self.packet_size))).encode()
             # List of packets when to send bad data:
-            err_pkts = random.sample(range(1, int(num_pkts) + 1), int(int(num_pkts) * self.data_err))
-            ack_err_pkts = random.sample(range(1, int(num_pkts) + 1), int(int(num_pkts) * self.ack_err))
+            err_pkts = random.sample(range(1, int(num_pkts) - windowSize), int(int(num_pkts) * self.data_err))
+            ack_err_pkts = random.sample(range(1, int(num_pkts) - windowSize), int(int(num_pkts) * self.ack_err))
             packet = num_pkts
             backnum = 0
             proceed = 1
@@ -190,7 +190,7 @@ class Server(Thread):
 
 
                     if resend == 1:
-                        while (self.hold_value != 10):
+                        while (self.hold_value != 100):
                             index = self.hold_value
                             while ((index) < windowSize):
                                 packet = p.build(datawindow[index], index, (p.checksum(datawindow[index], index)))
@@ -216,7 +216,7 @@ class Server(Thread):
                             if ackarray.__contains__("0"):
                                 pass
                             else:
-                                self.hold_value = 10
+                                self.hold_value = 100
                                 resend = 0
 
                         datawindow.clear()  # clear data window
@@ -306,7 +306,7 @@ class Client(Thread):
         port = 12000
         self.server_address = (ip, port)
         self.client_socket = socket(AF_INET, SOCK_DGRAM)
-        self.client_socket.settimeout(100)
+        self.client_socket.settimeout(0.05)
         self.packet_size = 4500
         self.ack_err = ack_err / 100
         self.data_err = data_err / 100
@@ -322,6 +322,7 @@ class Client(Thread):
         p = Packet(imagebytes, seqn, cs)
         len = 0
         ordercheck = []
+        errorindex = 1
         counter = 0
         errorflag = 0
         sendtrack = 0
@@ -334,7 +335,6 @@ class Client(Thread):
                     break
                 try:
                     packet = self.client_socket.recv(self.packet_size)
-
                 except:
                     print("timeout exit")
                     break
@@ -379,7 +379,7 @@ class Client(Thread):
                         self.client_socket.sendto(msg.encode(), self.server_address)
                         sendtrack += 1
 
-                if seqn == (windowsize - 1):
+                if seqn == (windowsize - 1) or counter >= (len - windowsize):
                     errorflag = 0  #reset error flag once it reaches the last frame of the window
                 if counter == 0:
                     counter += 1
