@@ -12,6 +12,8 @@ parser.add_argument("-d", "--data", type=int, default=0)
 parser.add_argument("-al", "--ackloss", type=int, default=0)
 parser.add_argument("-dl", "--dataloss", type=int, default=0)
 parser.add_argument("-w", "--win_s", type=int, default=10)
+parser.add_argument("-t", "--timeout", type=float, default=0.05, 
+                    help="Float format in seconds: 0.05 = 50ms")
 
 class Packet():
 
@@ -84,7 +86,7 @@ class Timer(Thread):
         
 
 class Server(Thread):
-    def __init__(self, data_err, ack_err, window_size):
+    def __init__(self, data_err, ack_err, window_size, timeout):
         Thread.__init__(self)
         ip = '127.0.0.1'
         port = 12000
@@ -96,7 +98,7 @@ class Server(Thread):
         self.ack_err = ack_err / 100
         self.image = "penguin.bmp"
         self.timer = Timer()
-        self.timer.set_limit(0.05)
+        self.timer.set_limit(timeout)
         self.timer.start()
         self.window_size = window_size
 
@@ -298,7 +300,7 @@ class Client(Thread):
 
 if __name__ == "__main__":
     args = parser.parse_args()
-    server = Server(args.data, args.ackloss, args.win_s)
+    server = Server(args.data, args.ackloss, args.win_s, args.timeout)
     client = Client(args.ack, args.dataloss, args.win_s)
     server.start()
     client.start()
