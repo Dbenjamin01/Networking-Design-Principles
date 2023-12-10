@@ -11,6 +11,7 @@ parser.add_argument("-a", "--ack", type=int, default=0)
 parser.add_argument("-d", "--data", type=int, default=0)
 parser.add_argument("-al", "--ackloss", type=int, default=0)
 parser.add_argument("-dl", "--dataloss", type=int, default=0)
+parser.add_argument("-w", "--win_s", type=int, default=10)
 
 class Packet():
 
@@ -83,7 +84,7 @@ class Timer(Thread):
         
 
 class Server(Thread):
-    def __init__(self, data_err, ack_err):
+    def __init__(self, data_err, ack_err, window_size):
         Thread.__init__(self)
         ip = '127.0.0.1'
         port = 12000
@@ -97,6 +98,7 @@ class Server(Thread):
         self.timer = Timer()
         self.timer.set_limit(0.05)
         self.timer.start()
+        self.window_size = window_size
 
     def send_image(self):
         packet = b''
@@ -109,7 +111,7 @@ class Server(Thread):
         seqN = 0
         cs = 0
         eof = 0
-        window_size = 10
+        window_size = self.window_size
         open_slots = window_size
 
         p = Packet(packet, seqN, cs)
@@ -214,7 +216,7 @@ class Server(Thread):
         self.server_socket.close()
 
 class Client(Thread):
-    def __init__(self, ack_err, data_err):
+    def __init__(self, ack_err, data_err, window_size):
         Thread.__init__(self)
         ip = '127.0.0.1'
         port = 12000
@@ -224,6 +226,7 @@ class Client(Thread):
         self.packet_size = 4500
         self.ack_err = ack_err / 100
         self.data_err = data_err / 100
+        self.window_size = window_size
 
     def recv_img(self):
         data = b''
@@ -235,7 +238,7 @@ class Client(Thread):
         p = Packet(imagebytes, seqn, cs)
         len = 0
         counter = 0
-        window_size = 10
+        window_size = self.window_size
 
         # Receive number of packet first
         packet = self.client_socket.recv(self.packet_size)
@@ -247,7 +250,6 @@ class Client(Thread):
             try:
                 packet = self.client_socket.recv(self.packet_size)
             except:
-                print("Timeout exit, assuming transmission is over")
                 break
             
             # Extract packet
@@ -272,7 +274,7 @@ class Client(Thread):
                 exp_seqN = seqN
                 counter += 1
             # Previously acked packet, sender dropped ack but client kept moving look specifically for this type of problem
-            elif ack and (seqn == ((exp_seqN + 10) % (window_size * 2))):
+            elif ack and (seqn == ((exp_seqN + window_size) % (window_size * 2))):
                 prev_ack = (exp_seqN + 10) % (window_size * 2)
                 packet = p.build("ACK".encode(), prev_ack, (p.checksum("ACK".encode(), prev_ack)))
                 self.client_socket.sendto(packet, self.server_address)
@@ -296,8 +298,8 @@ class Client(Thread):
 
 if __name__ == "__main__":
     args = parser.parse_args()
-    server = Server(args.data, args.ackloss)
-    client = Client(args.ack, args.dataloss)
+    server = Server(args.data, args.ackloss, args.win_s)
+    client = Client(args.ack, args.dataloss, args.win_s)
     server.start()
     client.start()
     server.join()
