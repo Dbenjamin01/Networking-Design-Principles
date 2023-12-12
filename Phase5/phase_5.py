@@ -117,6 +117,7 @@ class Server(Thread):
         cs = 0
         eof = 0
         window_size = self.window_size
+        seqnum_bound = 2 * window_size
         open_slots = window_size
 
         p = Packet(packet, seqN, cs)
@@ -140,7 +141,7 @@ class Server(Thread):
                             eof = 1
                             break
                         packet_window.append((seqN, data))
-                        seqN = (seqN + 1) % (window_size * 2)
+                        seqN = (seqN + 1) % (seqnum_bound)
                     open_slots = 0
 
                 # Send packet burst
@@ -245,6 +246,8 @@ class Client(Thread):
         len = 0
         counter = 0
         window_size = self.window_size
+        seqnum_bound = 2 * window_size
+        prev_acks = [seqnum_bound] * window_size # List of previously acked seqns
 
         # Receive number of packet first
         packet = self.client_socket.recv(self.packet_size)
@@ -276,18 +279,19 @@ class Client(Thread):
                 data += imagebytes
                 packet = p.build("ACK".encode(), seqN, (p.checksum("ACK".encode(), seqN)))
                 self.client_socket.sendto(packet, self.server_address)
-                seqN = (seqN + 1) % (window_size * 2)
+                prev_acks.pop(0)
+                prev_acks.append(seqN)
+                seqN = (seqN + 1) % (seqnum_bound)
                 exp_seqN = seqN
                 counter += 1
             # Previously acked packet, sender dropped ack but client kept moving look specifically for this type of problem
-            elif ack and (seqn == ((exp_seqN + window_size) % (window_size * 2))):
-                prev_ack = (exp_seqN + window_size) % (window_size * 2)
-                packet = p.build("ACK".encode(), prev_ack, (p.checksum("ACK".encode(), prev_ack)))
+            elif ack and (seqn in prev_acks):
+                packet = p.build("ACK".encode(), seqn, (p.checksum("ACK".encode(), seqn)))
                 self.client_socket.sendto(packet, self.server_address)
             # Packet is out of order or bad
             else:
                 # Send ACK with bad seq_num since sender retransmits entire window anyway
-                bad_seq = (exp_seqN - 1) % (window_size * 2)
+                bad_seq = (exp_seqN - 1) % (seqnum_bound)
                 packet = p.build("ACK".encode(), bad_seq, (p.checksum("ACK".encode(), bad_seq)))
                 self.client_socket.sendto(packet, self.server_address)
 
