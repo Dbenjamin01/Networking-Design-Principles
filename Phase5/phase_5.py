@@ -6,14 +6,16 @@ import os
 import math
 import random
 import pickle
+
 parser = argparse.ArgumentParser()
 parser.add_argument("-a", "--ack", type=int, default=0)
 parser.add_argument("-d", "--data", type=int, default=0)
 parser.add_argument("-al", "--ackloss", type=int, default=0)
 parser.add_argument("-dl", "--dataloss", type=int, default=0)
 parser.add_argument("-w", "--win_s", type=int, default=10)
-parser.add_argument("-t", "--timeout", type=float, default=0.05, 
+parser.add_argument("-t", "--timeout", type=float, default=0.05,
                     help="Float format in seconds: 0.05 = 50ms")
+
 
 class Packet():
 
@@ -46,15 +48,16 @@ class Packet():
 
     def getACK(self, cs, calcCS):
         return 1 if cs == calcCS else 0
-    
+
+
 class Timer(Thread):
     def __init__(self):
         Thread.__init__(self)
         self.limit = 0
         self.stopped = 1
-        self.status = 0 # Timer status - 1: expired, 0: else
+        self.status = 0  # Timer status - 1: expired, 0: else
         self.terminated = 0
-    
+
     def set_limit(self, limit):
         self.limit = limit
 
@@ -63,7 +66,7 @@ class Timer(Thread):
 
     def get_status(self):
         return self.status
-    
+
     def terminate(self):
         self.terminated = 1
 
@@ -82,8 +85,8 @@ class Timer(Thread):
                     self.status = 1
             else:
                 pass
-            sleep(0.0001) # Needed for other threads to run properly
-        
+            sleep(0.0001)  # Needed for other threads to run properly
+
 
 class Server(Thread):
     def __init__(self, data_err, ack_err, window_size, timeout):
@@ -125,15 +128,15 @@ class Server(Thread):
             packet = num_pkts
             self.server_socket.sendto(packet, self.client_address)
             print("SERVER | Sending image packets...")
-            start_time = time() # Transmission start time
-            
+            start_time = time()  # Transmission start time
+
             while True:
 
                 # Fill window (seqN, data) format
                 if not eof:
                     for _ in range(open_slots):
                         data = img.read(self.packet_size)
-                        if data == "": # Empty data indicates end of file
+                        if data == "":  # Empty data indicates end of file
                             eof = 1
                             break
                         packet_window.append((seqN, data))
@@ -144,12 +147,13 @@ class Server(Thread):
                 for item in packet_window:
                     seq, data = item
                     if corruption_counter in err_pkts:
-                        packet = p.build(b"".join([data[0:1023], b"\0x00"]), seq, (p.checksum(data, seq))) # Corrupt data
+                        packet = p.build(b"".join([data[0:1023], b"\0x00"]), seq,
+                                         (p.checksum(data, seq)))  # Corrupt data
                         err_pkts.remove(corruption_counter)
                         pass
                     else:
                         corruption_counter += 1
-                        packet = p.build(data, seq, (p.checksum(data, seq))) # Good data
+                        packet = p.build(data, seq, (p.checksum(data, seq)))  # Good data
                     self.server_socket.sendto(packet, self.client_address)
 
                 # Await acks
@@ -161,7 +165,7 @@ class Server(Thread):
                         ack = self.server_socket.recv(self.packet_size)
                         acks.append(ack)
                         self.timer.restart()
-                        if(len(acks)) == window_size:
+                        if (len(acks)) == window_size:
                             break
                     except:
                         if self.timer.get_status():
@@ -177,19 +181,19 @@ class Server(Thread):
                     localcs = p.checksum(rec_data, rec_seq)
                     ack = p.getACK(rec_cs, localcs)
                     if ack:
-                        seq_nums.append(rec_seq) # Append all successful ack seq_nums to be checked
+                        seq_nums.append(rec_seq)  # Append all successful ack seq_nums to be checked
                 while True:
-                    _seq, _ = packet_window[0] # Get seqnum from first element of window
+                    _seq, _ = packet_window[0]  # Get seqnum from first element of window
                     if counter in ack_err_pkts:
                         ack_err_pkts.remove(counter)
                         try:
                             seq_nums.remove(_seq)
                         except:
                             pass
-                    elif _seq in seq_nums:       # Check that desired seqnum was ACKed
+                    elif _seq in seq_nums:  # Check that desired seqnum was ACKed
                         seq_nums.remove(_seq)
-                        packet_window.pop(0)   # Remove data from window if ACKed
-                        open_slots += 1        # Advertise open slots
+                        packet_window.pop(0)  # Remove data from window if ACKed
+                        open_slots += 1  # Advertise open slots
                         counter += 1
                         if len(packet_window) == 0:
                             break
@@ -199,9 +203,8 @@ class Server(Thread):
                 if counter >= int(num_pkts):
                     break
 
-
         print("SERVER | Transmission completed")
-        end_time = time() # Transmission end time
+        end_time = time()  # Transmission end time
         print("Completion Time: ", end_time - start_time)
         img.close()
         self.timer.terminate()
@@ -216,6 +219,7 @@ class Server(Thread):
             self.server_socket.settimeout(0.01)
             self.send_image()
         self.server_socket.close()
+
 
 class Client(Thread):
     def __init__(self, ack_err, data_err, window_size):
@@ -253,7 +257,7 @@ class Client(Thread):
                 packet = self.client_socket.recv(self.packet_size)
             except:
                 break
-            
+
             # Extract packet
             imagebytes, seqn, cs = p.extract(packet)
             localcs = p.checksum(imagebytes, seqn)
@@ -277,7 +281,7 @@ class Client(Thread):
                 counter += 1
             # Previously acked packet, sender dropped ack but client kept moving look specifically for this type of problem
             elif ack and (seqn == ((exp_seqN + window_size) % (window_size * 2))):
-                prev_ack = (exp_seqN + 10) % (window_size * 2)
+                prev_ack = (exp_seqN + window_size) % (window_size * 2)
                 packet = p.build("ACK".encode(), prev_ack, (p.checksum("ACK".encode(), prev_ack)))
                 self.client_socket.sendto(packet, self.server_address)
             # Packet is out of order or bad
@@ -286,7 +290,6 @@ class Client(Thread):
                 bad_seq = (exp_seqN - 1) % (window_size * 2)
                 packet = p.build("ACK".encode(), bad_seq, (p.checksum("ACK".encode(), bad_seq)))
                 self.client_socket.sendto(packet, self.server_address)
-
 
         with open('server_to_client_image.bmp', 'wb+') as img:
             img.write(data)
@@ -297,6 +300,7 @@ class Client(Thread):
         print("CLIENT | Client is up, sending request to server")
         self.client_socket.sendto("download".encode(), self.server_address)
         self.recv_img()
+
 
 if __name__ == "__main__":
     args = parser.parse_args()
