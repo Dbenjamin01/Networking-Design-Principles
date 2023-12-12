@@ -15,6 +15,7 @@ parser.add_argument("-dl", "--dataloss", type=int, default=0)
 parser.add_argument("-w", "--win_s", type=int, default=10)
 parser.add_argument("-t", "--timeout", type=float, default=0.05,
                     help="Float format in seconds: 0.05 = 50ms")
+parser.add_argument("-r", "--recov", type=int, default=1)
 
 
 class Packet():
@@ -107,7 +108,6 @@ class Server(Thread):
 
     def send_image(self):
         packet = b''
-        err_pkts = []
         packet_window = []
         acks = []
         seq_nums = []
@@ -187,10 +187,7 @@ class Server(Thread):
                     _seq, _ = packet_window[0]  # Get seqnum from first element of window
                     if counter in ack_err_pkts:
                         ack_err_pkts.remove(counter)
-                        try:
-                            seq_nums.remove(_seq)
-                        except:
-                            pass
+                        break # Drop out of ACK processing to simulate lost ACK
                     elif _seq in seq_nums:  # Check that desired seqnum was ACKed
                         seq_nums.remove(_seq)
                         packet_window.pop(0)  # Remove data from window if ACKed
@@ -223,7 +220,7 @@ class Server(Thread):
 
 
 class Client(Thread):
-    def __init__(self, ack_err, data_err, window_size):
+    def __init__(self, ack_err, data_err, window_size, recovery):
         Thread.__init__(self)
         ip = '127.0.0.1'
         port = 12000
@@ -234,6 +231,7 @@ class Client(Thread):
         self.ack_err = ack_err / 100
         self.data_err = data_err / 100
         self.window_size = window_size
+        self.recovery = recovery
 
     def recv_img(self):
         data = b''
@@ -275,7 +273,7 @@ class Client(Thread):
                 continue
 
             # Packet is good
-            if ack and (seqn == exp_seqN):
+            if (ack and (seqn == exp_seqN)) or not self.recovery:
                 data += imagebytes
                 packet = p.build("ACK".encode(), seqN, (p.checksum("ACK".encode(), seqN)))
                 self.client_socket.sendto(packet, self.server_address)
@@ -309,7 +307,7 @@ class Client(Thread):
 if __name__ == "__main__":
     args = parser.parse_args()
     server = Server(args.data, args.ackloss, args.win_s, args.timeout)
-    client = Client(args.ack, args.dataloss, args.win_s)
+    client = Client(args.ack, args.dataloss, args.win_s, args.recov)
     server.start()
     client.start()
     server.join()
