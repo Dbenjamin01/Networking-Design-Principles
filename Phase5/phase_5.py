@@ -88,6 +88,8 @@ class Timer(Thread):
                 pass
             sleep(0.0001)  # Needed for other threads to run properly
 
+def get_rand(percentage):
+    return 0 if random.randrange(0, 1000) >= (percentage * 10) else 1
 
 class Server(Thread):
     def __init__(self, data_err, ack_err, window_size, timeout):
@@ -98,11 +100,12 @@ class Server(Thread):
         self.server_socket = socket(AF_INET, SOCK_DGRAM)
         self.server_socket.bind(address)
         self.packet_size = 1024
-        self.data_err = data_err / 100
-        self.ack_err = ack_err / 100
+        self.data_err = data_err
+        self.ack_err = ack_err
         self.image = "penguin.bmp"
         self.timer = Timer()
-        self.timer.set_limit(timeout)
+        self.timeout = timeout
+        self.timer.set_limit(self.timeout)
         self.timer.start()
         self.window_size = window_size
 
@@ -111,23 +114,14 @@ class Server(Thread):
         packet_window = []
         acks = []
         seq_nums = []
-        counter = 0
-        corruption_counter = 0
         seqN = 0
         cs = 0
         eof = 0
         window_size = self.window_size
         seqnum_bound = 2 * window_size
-        open_slots = window_size
 
         p = Packet(packet, seqN, cs)
         with open(self.image, 'rb') as img:
-            num_pkts = str(int(math.ceil(os.fstat(img.fileno()).st_size / self.packet_size))).encode()
-            # List of packets when to send bad data:
-            err_pkts = random.sample(range(1, int(num_pkts) + 1), int(int(num_pkts) * self.data_err))
-            ack_err_pkts = random.sample(range(1, int(num_pkts) + 1), int(int(num_pkts) * self.ack_err))
-            packet = num_pkts
-            self.server_socket.sendto(packet, self.client_address)
             print("SERVER | Sending image packets...")
             start_time = time()  # Transmission start time
 
@@ -135,27 +129,24 @@ class Server(Thread):
 
                 # Fill window (seqN, data) format
                 if not eof:
-                    for _ in range(open_slots):
+                    for _ in range(window_size - len(packet_window)):
                         data = img.read(self.packet_size)
-                        if data == "":  # Empty data indicates end of file
+                        if data == b"":  # Empty data indicates end of file
                             eof = 1
                             break
                         packet_window.append((seqN, data))
                         seqN = (seqN + 1) % (seqnum_bound)
-                    open_slots = 0
 
                 # Send packet burst
+                packets_sent = 0
                 for item in packet_window:
                     seq, data = item
-                    if corruption_counter in err_pkts:
-                        packet = p.build(b"".join([data[0:1023], b"\0x00"]), seq,
-                                         (p.checksum(data, seq)))  # Corrupt data
-                        err_pkts.remove(corruption_counter)
-                        pass
+                    if get_rand(self.data_err):
+                        packet = p.build(b"".join([data[0:1023], b"\0x00"]), seq, (p.checksum(data, seq)))  # Corrupt data
                     else:
-                        corruption_counter += 1
                         packet = p.build(data, seq, (p.checksum(data, seq)))  # Good data
                     self.server_socket.sendto(packet, self.client_address)
+                    packets_sent += 1
 
                 # Await acks
                 acks.clear()
@@ -166,7 +157,7 @@ class Server(Thread):
                         ack = self.server_socket.recv(self.packet_size)
                         acks.append(ack)
                         self.timer.restart()
-                        if (len(acks)) == window_size:
+                        if (len(acks)) == packets_sent:
                             break
                     except:
                         if self.timer.get_status():
@@ -181,28 +172,23 @@ class Server(Thread):
                     rec_data, rec_seq, rec_cs = p.extract(packet)
                     localcs = p.checksum(rec_data, rec_seq)
                     ack = p.getACK(rec_cs, localcs)
-                    if ack:
-                        seq_nums.append(rec_seq)  # Append all successful ack seq_nums to be checked
-                while True:
-                    _seq, _ = packet_window[0]  # Get seqnum from first element of window
-                    if counter in ack_err_pkts:
-                        ack_err_pkts.remove(counter)
-                        break # Drop out of ACK processing to simulate lost ACK
-                    elif _seq in seq_nums:  # Check that desired seqnum was ACKed
-                        seq_nums.remove(_seq)
-                        packet_window.pop(0)  # Remove data from window if ACKed
-                        open_slots += 1  # Advertise open slots
-                        counter += 1
-                        if len(packet_window) == 0:
-                            break
-                    else:
-                        break
+                    if get_rand(self.ack_err):
+                        pass
+                    elif ack:
+                        seq_nums.append(rec_seq)  # Append successful ack seq_nums to be checked
+                index = 0
+                for i in range(len(packet_window)):
+                    _seq, _ = packet_window[i]  # Get seqnum from first element of window
+                    if _seq in seq_nums:  # Check that desired seqnum was ACKed
+                        index = i + 1
+                del(packet_window[:index]) # Remove acked packets cumulatively
 
-                if counter >= int(num_pkts):
+                # End transmission if all data has been successfully read and acked
+                if eof and len(packet_window) == 0:
                     break
-
+        
+        end_time = time() # Transmission end time
         print("SERVER | Transmission completed")
-        end_time = time()  # Transmission end time
         print("Completion Time: ", end_time - start_time)
         img.close()
         self.timer.terminate()
@@ -212,9 +198,9 @@ class Server(Thread):
         print("SERVER | Server is up, awaiting client request")
         msg, self.client_address = self.server_socket.recvfrom(self.packet_size)
         if msg.decode() == "download":
-            print("SERVER | Download request, sending image")
+            print("SERVER | Download request received")
             # Set builtin socket timeout lower than our thread timer so the try/except actually goes off
-            self.server_socket.settimeout(0.01)
+            self.server_socket.settimeout(self.timeout / 10)
             self.send_image()
         self.server_socket.close()
 
@@ -228,8 +214,8 @@ class Client(Thread):
         self.client_socket = socket(AF_INET, SOCK_DGRAM)
         self.client_socket.settimeout(2)
         self.packet_size = 4500
-        self.ack_err = ack_err / 100
-        self.data_err = data_err / 100
+        self.ack_err = ack_err
+        self.data_err = data_err
         self.window_size = window_size
         self.recovery = recovery
 
@@ -241,17 +227,9 @@ class Client(Thread):
         seqn = 0
         exp_seqN = 0
         p = Packet(imagebytes, seqn, cs)
-        len = 0
-        counter = 0
         window_size = self.window_size
         seqnum_bound = 2 * window_size
         prev_acks = [seqnum_bound] * window_size # List of previously acked seqns
-
-        # Receive number of packet first
-        packet = self.client_socket.recv(self.packet_size)
-        len = int(packet.decode())
-        err_pkts = random.sample(range(1, len + 1), int(len * self.ack_err))
-        data_err_pkts = random.sample(range(1, len + 1), int(len * self.data_err))
 
         while True:
             try:
@@ -265,11 +243,9 @@ class Client(Thread):
             ack = p.getACK(cs, localcs)
 
             # Client side forced errors
-            if counter in err_pkts:
-                err_pkts.remove(counter)
+            if get_rand(self.ack_err):
                 ack = 0
-            elif counter in data_err_pkts:
-                data_err_pkts.remove(counter)
+            elif get_rand(self.data_err):
                 continue
 
             # Packet is good
@@ -281,7 +257,6 @@ class Client(Thread):
                 prev_acks.append(seqN)
                 seqN = (seqN + 1) % (seqnum_bound)
                 exp_seqN = seqN
-                counter += 1
             # Previously acked packet, sender dropped ack but client kept moving look specifically for this type of problem
             elif ack and (seqn in prev_acks):
                 packet = p.build("ACK".encode(), seqn, (p.checksum("ACK".encode(), seqn)))
