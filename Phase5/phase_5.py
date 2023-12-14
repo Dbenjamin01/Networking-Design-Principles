@@ -2,8 +2,6 @@ from socket import *
 from threading import Thread
 from time import sleep, time
 import argparse
-import os
-import math
 import random
 import pickle
 
@@ -89,7 +87,7 @@ class Timer(Thread):
             sleep(0.0001)  # Needed for other threads to run properly
 
 def get_rand(percentage):
-    return 0 if random.randrange(0, 1000) >= (percentage * 10) else 1
+    return 0 if random.randrange(0, 1000) > (percentage * 10) else 1
 
 class Server(Thread):
     def __init__(self, data_err, ack_err, window_size, timeout):
